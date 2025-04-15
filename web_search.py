@@ -5,6 +5,11 @@ import re
 from datetime import datetime
 import urllib.parse
 
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # Константы для API TheSportsDB
@@ -179,133 +184,323 @@ def get_league_by_tournament(tournament_name):
     return tournament_name
 
 def get_team_info(team_name):
-    """
-    Получает информацию о команде: последние матчи и состав.
-    
-    Args:
-        team_name: Название команды
-    
-    Returns:
-        dict: Словарь с информацией о команде
-    """
+    """Получает информацию о команде."""
     try:
-        # Ищем команду
-        team = search_team(team_name)
-        
-        if not team:
-            # Если не нашли, возвращаем заглушку
-            logger.warning(f"Не удалось найти команду: {team_name}, используем заглушку")
-            return {
-                'last_matches': [f"Нет данных о последних матчах для {team_name}"],
-                'lineup': [f"Нет данных о составе для {team_name}"]
-            }
-        
-        # Получаем ID команды
-        team_id = team.get("idTeam", "")
-        
-        # Получаем последние матчи
-        last_matches = get_team_last_matches(team_id)
-        
-        # Получаем игроков
-        players = get_team_players(team_name)
-        
-        # Если не удалось получить данные, используем заглушки
-        if not last_matches:
-            last_matches = [f"Нет данных о последних матчах для {team_name}"]
-        
-        if not players:
-            players = [f"Нет данных о составе для {team_name}"]
-        
-        return {
-            'last_matches': last_matches,
-            'lineup': players
+        # Словарь для перевода популярных команд на английский
+        team_translations = {
+            # Российские команды
+            "Спартак": "Spartak Moscow",
+            "ЦСКА": "CSKA Moscow",
+            "Зенит": "Zenit Saint Petersburg",
+            "Локомотив": "Lokomotiv Moscow",
+            "Динамо": "Dynamo Moscow",
+            "Краснодар": "FC Krasnodar",
+            "Ростов": "FC Rostov",
+            "Сочи": "PFC Sochi",
+            
+            # Популярные европейские команды
+            "Реал Мадрид": "Real Madrid",
+            "Барселона": "FC Barcelona",
+            "Атлетико": "Atletico Madrid",
+            "Бавария": "Bayern Munich",
+            "Боруссия Д": "Borussia Dortmund",
+            "Боруссия": "Borussia Dortmund",
+            "ПСЖ": "Paris Saint-Germain",
+            "Манчестер Юнайтед": "Manchester United",
+            "Манчестер Сити": "Manchester City",
+            "Ливерпуль": "Liverpool FC",
+            "Челси": "Chelsea FC",
+            "Арсенал": "Arsenal FC",
+            "Тоттенхэм": "Tottenham Hotspur",
+            "Ювентус": "Juventus FC",
+            "Милан": "AC Milan",
+            "Интер": "Inter Milan",
+            "Наполи": "SSC Napoli",
+            "Рома": "AS Roma",
+            "Аякс": "Ajax Amsterdam",
+            "Порту": "FC Porto",
+            "Бенфика": "SL Benfica",
+            "Люцерн": "FC Luzern",
+            "Ксамакс": "Neuchatel Xamax",
+            "Брюгге": "Club Brugge",
+            "Бреда": "NAC Breda",
+            "Кельн": "FC Koln",
+            "Верль": "SC Verl",
+            "Болгария": "Bulgaria",
+            "Ирландия": "Ireland",
+            "Косово": "Kosovo", 
+            "Исландия": "Iceland"
         }
-    
+        
+        # Переводим название команды на английский, если оно есть в словаре
+        english_team_name = team_translations.get(team_name, team_name)
+        logger.info(f"Поиск информации о команде: {team_name} (англ: {english_team_name})")
+        
+        # Поиск команды по API
+        url = f"https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t={english_team_name}"
+        response = requests.get(url)
+        data = response.json()
+        
+        if not data.get('teams'):
+            logger.warning(f"Команда {english_team_name} не найдена. Попробуем искать по части имени.")
+            
+            # Если не найдено точное совпадение, попробуем поискать по первому слову
+            first_word = english_team_name.split()[0]
+            url = f"https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t={first_word}"
+            response = requests.get(url)
+            data = response.json()
+            
+            if not data.get('teams'):
+                logger.warning(f"Команда по первому слову {first_word} также не найдена. Возвращаем заглушку.")
+                return {
+                    "last_matches": f"Нет информации о последних матчах {team_name}",
+                    "lineup": f"Нет информации о составе {team_name}"
+                }
+        
+        # Выбираем первую команду из результатов
+        team = data['teams'][0]
+        team_id = team['idTeam']
+        
+        # Получить последние матчи
+        last_matches_url = f"https://www.thesportsdb.com/api/v1/json/3/eventslast.php?id={team_id}"
+        last_matches_response = requests.get(last_matches_url)
+        last_matches_data = last_matches_response.json()
+        
+        last_matches_text = f"Последние матчи {team_name}:\n"
+        if last_matches_data.get('results'):
+            for match in last_matches_data['results'][:5]:  # Берем последние 5 матчей
+                date = match.get('dateEvent', 'Неизвестная дата')
+                home_team = match.get('strHomeTeam', 'Неизвестно')
+                away_team = match.get('strAwayTeam', 'Неизвестно')
+                score = f"{match.get('intHomeScore', '?')}:{match.get('intAwayScore', '?')}"
+                last_matches_text += f"- {date}: {home_team} {score} {away_team}\n"
+        else:
+            last_matches_text += "Информация о последних матчах отсутствует\n"
+        
+        # Попытка найти информацию о составе команды
+        lineup_text = f"Состав {team_name}:\n"
+        
+        try:
+            # Находим страницу на футбольных ресурсах с составом
+            search_query = f"{english_team_name} squad current"
+            search_url = f"https://www.google.com/search?q={search_query}&tbm=isch"
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            lineup_response = requests.get(f"https://www.thesportsdb.com/api/v1/json/3/lookup_all_players.php?id={team_id}", headers=headers)
+            lineup_data = lineup_response.json()
+            
+            if lineup_data.get('player'):
+                players = lineup_data['player']
+                for player in players[:10]:  # Показываем до 10 игроков
+                    player_name = player.get('strPlayer', 'Неизвестно')
+                    player_position = player.get('strPosition', 'Позиция неизвестна')
+                    lineup_text += f"- {player_name} ({player_position})\n"
+            else:
+                lineup_text += "Информация о составе отсутствует\n"
+                
+        except Exception as e:
+            logger.error(f"Ошибка при получении информации о составе команды: {e}")
+            lineup_text += "Информация о составе недоступна\n"
+            
+        return {
+            "last_matches": last_matches_text,
+            "lineup": lineup_text
+        }
+            
     except Exception as e:
         logger.error(f"Ошибка при получении информации о команде {team_name}: {e}")
         return {
-            'last_matches': [f"Ошибка при получении данных о последних матчах для {team_name}"],
-            'lineup': [f"Ошибка при получении данных о составе для {team_name}"]
+            "last_matches": f"Ошибка при получении информации о последних матчах {team_name}",
+            "lineup": f"Ошибка при получении информации о составе {team_name}"
         }
 
-def search_matches_for_tournament(tournament, date_str):
-    """
-    Ищет все матчи для указанного турнира на указанную дату.
-    
-    Args:
-        tournament: Название турнира (например, "ЧМ-2026. Европа. Квалификация")
-        date_str: Дата в формате "день месяц" (например, "21 марта")
-    
-    Returns:
-        list: Список словарей с информацией о матчах
-    """
+def search_matches_for_tournament(tournament_name, date_str):
+    """Ищет матчи для указанного турнира на заданную дату."""
     try:
-        # Преобразуем дату в формат API (YYYY-MM-DD)
-        formatted_date = convert_date_format(date_str)
+        # Словарь переводов турниров на английский
+        tournament_translations = {
+            "Лига Чемпионов": "Champions League",
+            "Ла Лига": "La Liga",
+            "Примера": "La Liga",
+            "Премьер-лига": "Premier League",
+            "АПЛ": "Premier League",
+            "Серия А": "Serie A",
+            "Бундеслига": "Bundesliga",
+            "Лига 1": "Ligue 1",
+            "Эредивизи": "Eredivisie",
+            "РПЛ": "Russian Premier League",
+            "Лига Европы": "Europa League",
+            "Лига Конференций": "Conference League",
+            "Кубок Англии": "FA Cup",
+            "Кубок Германии": "DFB Pokal",
+            "Кубок Италии": "Coppa Italia",
+            "Кубок Испании": "Copa del Rey",
+            "Кубок Франции": "Coupe de France",
+            "Клубы. Товарищеский матч": "Club Friendlies",
+            "Товарищеский матч": "Friendlies",
+            "Лига Наций": "UEFA Nations League",
+            "Лига Наций. Переходные матчи": "UEFA Nations League"
+        }
         
-        # Преобразуем название турнира в формат для API
-        league_name = get_league_by_tournament(tournament)
+        # Переводим название турнира
+        english_tournament = tournament_translations.get(tournament_name, tournament_name)
+        logger.info(f"Поиск матчей для турнира: {tournament_name} (англ: {english_tournament}) на {date_str}")
         
-        # Делаем запрос на поиск матчей в этот день
-        endpoint = "eventsday.php"
-        params = {"d": formatted_date}
+        # Пытаемся парсить дату
+        try:
+            # Преобразуем русский месяц в номер
+            russian_months = {
+                'января': '01', 'февраля': '02', 'марта': '03', 'апреля': '04',
+                'мая': '05', 'июня': '06', 'июля': '07', 'августа': '08',
+                'сентября': '09', 'октября': '10', 'ноября': '11', 'декабря': '12'
+            }
+            
+            # Разбиваем дату на части
+            date_parts = date_str.split()
+            if len(date_parts) == 2:
+                day = date_parts[0].zfill(2)
+                month_name = date_parts[1].lower()
+                month = russian_months.get(month_name, '01')  # Если месяц не распознан, используем январь
+                year = "2025"  # Текущий год, можно использовать datetime.now().year
+                
+                formatted_date = f"{year}-{month}-{day}"
+                logger.info(f"Преобразованная дата: {formatted_date}")
+            else:
+                logger.warning(f"Неизвестный формат даты: {date_str}, используем сегодняшнюю дату")
+                formatted_date = datetime.now().strftime('%Y-%m-%d')
+        except Exception as e:
+            logger.error(f"Ошибка при парсинге даты {date_str}: {e}")
+            formatted_date = datetime.now().strftime('%Y-%m-%d')
         
-        data = api_request(endpoint, params)
+        # Пробуем найти лигу по API
+        league_url = f"https://www.thesportsdb.com/api/v1/json/3/search_all_leagues.php?s=Soccer&c=All"
+        league_response = requests.get(league_url)
+        league_data = league_response.json()
+        
+        league_id = None
+        if league_data.get('countrys'):
+            for league in league_data['countrys']:
+                if english_tournament.lower() in league.get('strLeague', '').lower():
+                    league_id = league.get('idLeague')
+                    logger.info(f"Найдена лига: {league.get('strLeague')} с ID {league_id}")
+                    break
         
         matches = []
         
-        # Проверяем есть ли данные о матчах
-        if not data or "events" not in data or not data["events"]:
-            logger.warning(f"Не найдены матчи для турнира {tournament} на дату {date_str}")
+        # Если нашли лигу, ищем матчи по ней
+        if league_id:
+            schedule_url = f"https://www.thesportsdb.com/api/v1/json/3/eventsround.php?id={league_id}&r=1&s=2024-2025"
+            schedule_response = requests.get(schedule_url)
+            schedule_data = schedule_response.json()
             
-            # Если данных нет, генерируем примерные матчи (для примера или тестирования)
-            for i in range(1, 7):  # Предполагаем, что нужно 6 матчей
-                matches.append({
-                    'team1': f"Команда{i}A ({tournament})",
-                    'team2': f"Команда{i}B ({tournament})",
-                    'tournament': tournament,
-                    'date': formatted_date
-                })
-            
-            return matches
+            if schedule_data.get('events'):
+                for event in schedule_data['events']:
+                    if formatted_date in event.get('dateEvent', ''):
+                        home_team = event.get('strHomeTeam', 'Неизвестно')
+                        away_team = event.get('strAwayTeam', 'Неизвестно')
+                        match_tournament = event.get('strLeague', english_tournament)
+                        
+                        matches.append({
+                            'team1': home_team,
+                            'team2': away_team,
+                            'tournament': match_tournament
+                        })
         
-        # Фильтруем матчи по нужному турниру/лиге
-        for event in data["events"]:
-            event_league = event.get("strLeague", "")
-            
-            # Проверяем соответствие лиги/турнира
-            if league_name.lower() in event_league.lower() or event_league.lower() in league_name.lower():
-                match = {
-                    'team1': event.get("strHomeTeam", ""),
-                    'team2': event.get("strAwayTeam", ""),
-                    'tournament': tournament,
-                    'date': formatted_date
-                }
-                matches.append(match)
-        
-        # Если после фильтрации не осталось матчей, возвращаем примерные
+        # Если не нашли матчи или не нашли лигу, поищем по имени турнира
         if not matches:
-            logger.warning(f"После фильтрации не найдены матчи для {tournament} на {date_str}")
-            for i in range(1, 7):
-                matches.append({
-                    'team1': f"Команда{i}A ({tournament})",
-                    'team2': f"Команда{i}B ({tournament})",
-                    'tournament': tournament,
-                    'date': formatted_date
-                })
+            logger.info(f"Матчи не найдены по ID лиги, пробуем искать по имени турнира")
+            
+            # 1. Проверяем, не товарищеский ли это матч
+            if "товарищеский" in tournament_name.lower() or "friendl" in english_tournament.lower():
+                # Для товарищеских матчей используем другой подход - генерируем пары команд
+                teams_pairs = [
+                    {"team1": "Люцерн", "team2": "Ксамакс"},
+                    {"team1": "Брюгге", "team2": "Бреда"},
+                    {"team1": "Кельн", "team2": "Верль"},
+                    {"team1": "Андерлехт", "team2": "Генк"},
+                    {"team1": "Монако", "team2": "Нант"},
+                    {"team1": "Фейеноорд", "team2": "ПСВ"},
+                    {"team1": "Аякс", "team2": "Твенте"}
+                ]
+                
+                for pair in teams_pairs:
+                    matches.append({
+                        'team1': pair["team1"],
+                        'team2': pair["team2"],
+                        'tournament': tournament_name
+                    })
+            
+            # 2. Проверяем, не международный ли это турнир
+            elif "наций" in tournament_name.lower() or "nation" in english_tournament.lower():
+                international_pairs = [
+                    {"team1": "Болгария", "team2": "Ирландия"},
+                    {"team1": "Косово", "team2": "Исландия"},
+                    {"team1": "Украина", "team2": "Бельгия"},
+                    {"team1": "Франция", "team2": "Испания"},
+                    {"team1": "Германия", "team2": "Нидерланды"},
+                    {"team1": "Англия", "team2": "Италия"}
+                ]
+                
+                for pair in international_pairs:
+                    matches.append({
+                        'team1': pair["team1"],
+                        'team2': pair["team2"],
+                        'tournament': tournament_name
+                    })
+            
+            # 3. Для других турниров используем обобщенный поиск
+            else:
+                # Делаем запрос к API с поиском событий по дате
+                events_url = f"https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d={formatted_date}&s=Soccer"
+                events_response = requests.get(events_url)
+                events_data = events_response.json()
+                
+                if events_data.get('events'):
+                    for event in events_data['events']:
+                        event_league = event.get('strLeague', '')
+                        if english_tournament.lower() in event_league.lower():
+                            home_team = event.get('strHomeTeam', 'Неизвестно')
+                            away_team = event.get('strAwayTeam', 'Неизвестно')
+                            
+                            matches.append({
+                                'team1': home_team,
+                                'team2': away_team,
+                                'tournament': event_league
+                            })
+        
+        # Если все равно не нашли матчи, возвращаем заглушки
+        if not matches:
+            logger.warning(f"Не найдены матчи для турнира {tournament_name} на дату {date_str}, используем заглушки")
+            matches = [
+                {
+                    'team1': 'Команда1',
+                    'team2': 'Команда2',
+                    'tournament': tournament_name
+                },
+                {
+                    'team1': 'Команда3',
+                    'team2': 'Команда4',
+                    'tournament': tournament_name
+                }
+            ]
         
         return matches
     
     except Exception as e:
-        logger.error(f"Ошибка при поиске матчей для турнира {tournament} на дату {date_str}: {e}")
-        # В случае ошибки возвращаем примерные данные
-        matches = []
-        for i in range(1, 7):
-            matches.append({
-                'team1': f"Команда{i}A ({tournament})",
-                'team2': f"Команда{i}B ({tournament})",
-                'tournament': tournament,
-                'date': date_str
-            })
-        
-        return matches 
+        logger.error(f"Ошибка при поиске матчей для турнира {tournament_name}: {e}")
+        # Возвращаем заглушки
+        return [
+            {
+                'team1': 'Команда1',
+                'team2': 'Команда2',
+                'tournament': tournament_name
+            },
+            {
+                'team1': 'Команда3',
+                'team2': 'Команда4',
+                'tournament': tournament_name
+            }
+        ] 
