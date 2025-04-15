@@ -11,6 +11,7 @@ import openai
 import web_search
 import threading
 from flask import Flask, request
+from telegram.error import TimedOut
 
 # Настройка логирования
 logging.basicConfig(
@@ -319,7 +320,18 @@ def setup_bot():
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, process_matches))
     
     # Устанавливаем webhook
-    bot.set_webhook(APP_URL + '/' + TELEGRAM_TOKEN)
+    logger.info("Запуск бота в режиме webhook...")
+    try:
+        bot.set_webhook(APP_URL + '/' + TELEGRAM_TOKEN)
+        logger.info(f"Вебхук установлен на {APP_URL}")
+    except TimedOut:
+        logger.warning("Не удалось установить вебхук автоматически из-за таймаута. "
+                       f"Пожалуйста, установите его вручную, перейдя по ссылке: {APP_URL}/set_webhook")
+    except Exception as e:
+        logger.error(f"Произошла ошибка при установке вебхука: {e}")
+
+    # Настройка обработчиков Flask
+    setup_flask_routes(app, dispatcher)
 
 def run_polling():
     """Запуск бота в режиме polling (для локальной разработки)."""
