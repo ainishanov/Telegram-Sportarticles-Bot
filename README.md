@@ -41,6 +41,29 @@
 
 3. Бот обработает сообщение и начнет генерировать прогнозы
 
+## Деплой на Render
+
+1. Создайте аккаунт на [Render](https://render.com/)
+2. Подключите ваш GitHub репозиторий
+3. Создайте новый веб-сервис, выбрав репозиторий
+4. В разделе настроек укажите:
+   - **Environment**: Python
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `python bot.py`
+5. Добавьте переменные окружения:
+   - `TELEGRAM_BOT_TOKEN`: ваш токен от BotFather
+   - `OPENAI_API_KEY`: ваш ключ API OpenAI
+   - `APP_URL`: URL вашего приложения на Render (например, https://telegram-sportarticles-bot.onrender.com)
+6. Нажмите "Create Web Service"
+7. После успешного деплоя, откройте URL `/set_webhook` для активации вебхука бота
+
+## Локальная разработка
+
+Для локального запуска в режиме polling добавьте переменную окружения:
+```
+USE_POLLING=true
+```
+
 ## Примечания по реализации
 
 - Поиск информации о матчах реализован через модуль `web_search.py`
@@ -48,6 +71,6 @@
 - Бот настроен для обработки как конкретных матчей, так и целых турниров
 
 ## Требования
-- Python 3.8+
+- Python 3.9+
 - Токен Telegram бота
 - Ключ API OpenAI 
