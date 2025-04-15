@@ -330,9 +330,6 @@ def setup_bot():
     except Exception as e:
         logger.error(f"Произошла ошибка при установке вебхука: {e}")
 
-    # Настройка обработчиков Flask
-    setup_flask_routes(app, dispatcher)
-
 def run_polling():
     """Запуск бота в режиме polling (для локальной разработки)."""
     updater = Updater(TELEGRAM_TOKEN)
