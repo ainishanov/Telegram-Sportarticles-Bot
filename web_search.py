@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import datetime
 import urllib.parse
+import json
 
 # Настройка логирования
 logging.basicConfig(
@@ -236,13 +237,24 @@ def get_team_info(team_name):
         english_team_name = team_translations.get(team_name, team_name)
         logger.info(f"Поиск информации о команде: {team_name} (англ: {english_team_name})")
         
+        # Подробное логирование для отладки
+        with open('api_log.txt', 'a', encoding='utf-8') as log_file:
+            log_file.write(f"\n\n==== ПОИСК КОМАНДЫ: {team_name} (англ: {english_team_name}) ====\n")
+        
         # Поиск команды по API
         url = f"https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t={english_team_name}"
         response = requests.get(url)
         data = response.json()
         
+        # Запись ответа в лог
+        with open('api_log.txt', 'a', encoding='utf-8') as log_file:
+            log_file.write(f"URL запроса: {url}\n")
+            log_file.write(f"Ответ API для поиска команды:\n{json.dumps(data, indent=2, ensure_ascii=False)}\n")
+        
         if not data.get('teams'):
             logger.warning(f"Команда {english_team_name} не найдена. Попробуем искать по части имени.")
+            with open('api_log.txt', 'a', encoding='utf-8') as log_file:
+                log_file.write(f"Команда не найдена. Попробуем искать по первому слову.\n")
             
             # Если не найдено точное совпадение, попробуем поискать по первому слову
             first_word = english_team_name.split()[0]
@@ -250,8 +262,15 @@ def get_team_info(team_name):
             response = requests.get(url)
             data = response.json()
             
+            with open('api_log.txt', 'a', encoding='utf-8') as log_file:
+                log_file.write(f"URL запроса по первому слову: {url}\n")
+                log_file.write(f"Ответ API для поиска по первому слову:\n{json.dumps(data, indent=2, ensure_ascii=False)}\n")
+            
             if not data.get('teams'):
                 logger.warning(f"Команда по первому слову {first_word} также не найдена. Возвращаем заглушку.")
+                with open('api_log.txt', 'a', encoding='utf-8') as log_file:
+                    log_file.write(f"Команда не найдена даже по первому слову. Возвращаем заглушку.\n")
+                
                 return {
                     "last_matches": f"Нет информации о последних матчах {team_name}",
                     "lineup": f"Нет информации о составе {team_name}"
@@ -260,11 +279,17 @@ def get_team_info(team_name):
         # Выбираем первую команду из результатов
         team = data['teams'][0]
         team_id = team['idTeam']
+        with open('api_log.txt', 'a', encoding='utf-8') as log_file:
+            log_file.write(f"Найдена команда: {team.get('strTeam')} (ID: {team_id})\n")
         
         # Получить последние матчи
         last_matches_url = f"https://www.thesportsdb.com/api/v1/json/3/eventslast.php?id={team_id}"
         last_matches_response = requests.get(last_matches_url)
         last_matches_data = last_matches_response.json()
+        
+        with open('api_log.txt', 'a', encoding='utf-8') as log_file:
+            log_file.write(f"URL запроса последних матчей: {last_matches_url}\n")
+            log_file.write(f"Ответ API для последних матчей:\n{json.dumps(last_matches_data, indent=2, ensure_ascii=False)}\n")
         
         last_matches_text = f"Последние матчи {team_name}:\n"
         if last_matches_data.get('results'):
@@ -289,8 +314,13 @@ def get_team_info(team_name):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
             
-            lineup_response = requests.get(f"https://www.thesportsdb.com/api/v1/json/3/lookup_all_players.php?id={team_id}", headers=headers)
+            lineup_url = f"https://www.thesportsdb.com/api/v1/json/3/lookup_all_players.php?id={team_id}"
+            lineup_response = requests.get(lineup_url, headers=headers)
             lineup_data = lineup_response.json()
+            
+            with open('api_log.txt', 'a', encoding='utf-8') as log_file:
+                log_file.write(f"URL запроса состава: {lineup_url}\n")
+                log_file.write(f"Ответ API для состава:\n{json.dumps(lineup_data, indent=2, ensure_ascii=False)[:1000]}...\n")
             
             if lineup_data.get('player'):
                 players = lineup_data['player']
@@ -504,3 +534,80 @@ def search_matches_for_tournament(tournament_name, date_str):
                 'tournament': tournament_name
             }
         ] 
+
+def test_api_responses(team_name):
+    """Функция для тестирования и вывода подробной информации об ответах API."""
+    team_translations = {
+        "Люцерн": "FC Luzern",
+        "Ксамакс": "Neuchatel Xamax",
+    }
+    
+    english_team_name = team_translations.get(team_name, team_name)
+    print(f"Тестируем API для команды: {team_name} (англ: {english_team_name})")
+    
+    # 1. Поиск команды
+    search_url = f"https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t={english_team_name}"
+    print(f"Запрос: {search_url}")
+    search_response = requests.get(search_url)
+    search_data = search_response.json()
+    
+    if search_data.get('teams'):
+        team = search_data['teams'][0]
+        team_id = team['idTeam']
+        print(f"Найдена команда: {team['strTeam']} (ID: {team_id})")
+        print(f"Страна: {team.get('strCountry', 'Н/Д')}")
+        print(f"Лига: {team.get('strLeague', 'Н/Д')}")
+        
+        # 2. Получение последних матчей
+        last_matches_url = f"https://www.thesportsdb.com/api/v1/json/3/eventslast.php?id={team_id}"
+        print(f"\nЗапрос последних матчей: {last_matches_url}")
+        last_matches_response = requests.get(last_matches_url)
+        last_matches_data = last_matches_response.json()
+        
+        if last_matches_data.get('results'):
+            print("Последние матчи:")
+            for match in last_matches_data['results'][:5]:
+                date = match.get('dateEvent', 'Н/Д')
+                home = match.get('strHomeTeam', 'Н/Д')
+                away = match.get('strAwayTeam', 'Н/Д')
+                score = f"{match.get('intHomeScore', '?')}:{match.get('intAwayScore', '?')}"
+                print(f"- {date}: {home} {score} {away}")
+        else:
+            print("Информация о последних матчах отсутствует")
+        
+        # 3. Получение игроков
+        players_url = f"https://www.thesportsdb.com/api/v1/json/3/lookup_all_players.php?id={team_id}"
+        print(f"\nЗапрос игроков: {players_url}")
+        players_response = requests.get(players_url)
+        players_data = players_response.json()
+        
+        if players_data.get('player'):
+            print("Игроки команды:")
+            for player in players_data['player'][:5]:  # Показываем только первых 5 для краткости
+                name = player.get('strPlayer', 'Н/Д')
+                position = player.get('strPosition', 'Н/Д')
+                nationality = player.get('strNationality', 'Н/Д')
+                print(f"- {name} ({position}, {nationality})")
+        else:
+            print("Информация об игроках отсутствует")
+            
+    else:
+        print(f"Команда не найдена. Пробуем поиск по первому слову...")
+        first_word = english_team_name.split()[0]
+        search_url = f"https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t={first_word}"
+        print(f"Запрос: {search_url}")
+        search_response = requests.get(search_url)
+        search_data = search_response.json()
+        
+        if search_data.get('teams'):
+            print("Результаты поиска по первому слову:")
+            for i, team in enumerate(search_data['teams'][:5]):
+                print(f"{i+1}. {team.get('strTeam', 'Н/Д')} ({team.get('strCountry', 'Н/Д')}, {team.get('strLeague', 'Н/Д')})")
+        else:
+            print("Команда не найдена даже при поиске по первому слову")
+
+# Функция для тестирования ответов API при запуске модуля напрямую
+if __name__ == "__main__":
+    test_api_responses("Люцерн")
+    print("\n" + "="*50 + "\n")
+    test_api_responses("Ксамакс") 

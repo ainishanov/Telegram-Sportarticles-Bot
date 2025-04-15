@@ -296,6 +296,105 @@ def webhook():
 def index():
     return 'Бот работает!'
 
+# Маршрут для тестирования API для команд
+@app.route('/test_api')
+def test_api():
+    try:
+        import web_search
+        import json
+        
+        # Функция для тестирования API и форматирования результатов
+        def get_team_info_formatted(team_name, english_name):
+            result = "<h3>Тестирование API для команды: " + team_name + " (англ: " + english_name + ")</h3>"
+            
+            # URL для поиска команды
+            url = f"https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t={english_name}"
+            result += f"<p>URL запроса: <a href='{url}' target='_blank'>{url}</a></p>"
+            
+            try:
+                search_response = requests.get(url)
+                search_data = search_response.json()
+                
+                if search_data.get('teams'):
+                    team = search_data['teams'][0]
+                    team_id = team['idTeam']
+                    result += f"<p>Найдена команда: {team['strTeam']} (ID: {team_id})</p>"
+                    result += f"<p>Лига: {team.get('strLeague', 'Н/Д')}, Страна: {team.get('strCountry', 'Н/Д')}</p>"
+                    
+                    # Последние матчи
+                    matches_url = f"https://www.thesportsdb.com/api/v1/json/3/eventslast.php?id={team_id}"
+                    result += f"<p>URL последних матчей: <a href='{matches_url}' target='_blank'>{matches_url}</a></p>"
+                    
+                    matches_response = requests.get(matches_url)
+                    matches_data = matches_response.json()
+                    
+                    result += "<h4>Последние матчи:</h4>"
+                    if matches_data.get('results'):
+                        result += "<ul>"
+                        for match in matches_data['results'][:5]:
+                            date = match.get('dateEvent', 'Н/Д')
+                            home = match.get('strHomeTeam', 'Н/Д')
+                            away = match.get('strAwayTeam', 'Н/Д')
+                            score = f"{match.get('intHomeScore', '?')}:{match.get('intAwayScore', '?')}"
+                            result += f"<li>{date}: {home} {score} {away}</li>"
+                        result += "</ul>"
+                    else:
+                        result += "<p>Нет данных о последних матчах</p>"
+                    
+                    # Игроки
+                    players_url = f"https://www.thesportsdb.com/api/v1/json/3/lookup_all_players.php?id={team_id}"
+                    result += f"<p>URL состава: <a href='{players_url}' target='_blank'>{players_url}</a></p>"
+                    
+                    players_response = requests.get(players_url)
+                    players_data = players_response.json()
+                    
+                    result += "<h4>Игроки команды:</h4>"
+                    if players_data.get('player'):
+                        result += "<ul>"
+                        for player in players_data['player'][:10]:
+                            name = player.get('strPlayer', 'Н/Д')
+                            position = player.get('strPosition', 'Н/Д')
+                            result += f"<li>{name} ({position})</li>"
+                        result += "</ul>"
+                    else:
+                        result += "<p>Нет данных о составе</p>"
+                else:
+                    result += "<p>Команда не найдена!</p>"
+                    
+            except Exception as e:
+                result += f"<p>Ошибка при получении данных: {str(e)}</p>"
+                
+            return result
+        
+        # Формируем HTML страницу
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Тестирование API для команд</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                h1 { color: #333; }
+                hr { margin: 30px 0; }
+                a { color: #0066cc; }
+            </style>
+        </head>
+        <body>
+            <h1>Тестирование API для команд</h1>
+        """
+        
+        # Добавляем результаты тестирования для команд
+        html += get_team_info_formatted("Люцерн", "FC Luzern")
+        html += "<hr>"
+        html += get_team_info_formatted("Ксамакс", "Neuchatel Xamax")
+        
+        html += "</body></html>"
+        
+        return html
+    
+    except Exception as e:
+        return f"Произошла ошибка: {str(e)}"
+
 # Маршрут для установки webhook
 @app.route('/set_webhook')
 def set_webhook():
