@@ -157,35 +157,42 @@ def search_match_info(match):
         return None
 
 def generate_match_prediction(match_info, min_symbols):
-    """Генерирует прогноз на матч с использованием OpenAI API."""
+    """Генерирует прогноз на матч с использованием OpenAI API (ChatCompletion)."""
     try:
         if isinstance(match_info, list):
             # Для "Все X матчей"
             predictions = []
             for match in match_info:
-                prompt = f"""
+                system_prompt = "Ты - опытный спортивный аналитик, создающий прогнозы на футбольные матчи."
+                user_prompt = f"""
                 Напиши оригинальный прогноз на футбольный матч между командами {match['team1']} и {match['team2']} 
                 в рамках турнира {match['tournament']}. 
                 Прогноз должен содержать не менее {min_symbols} символов.
+                Учти, что команды определены как {match['team1']} и {match['team2']} для данного матча.
                 """
                 
-                response = openai.Completion.create(
-                    engine="text-davinci-003",
-                    prompt=prompt,
-                    max_tokens=2000,
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo", # Используем gpt-3.5-turbo
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    max_tokens=1500, # Можно немного уменьшить, т.к. chat модели эффективнее
                     n=1,
                     stop=None,
-                    temperature=0.8,
+                    temperature=0.7, # Можно немного понизить температуру для большей предсказуемости
                 )
                 
+                prediction_text = response.choices[0].message['content'].strip()
                 predictions.append({
                     'teams': f"{match['team1']} - {match['team2']}",
-                    'prediction': response.choices[0].text.strip()
+                    'prediction': prediction_text
                 })
             return predictions
         else:
             # Для одиночного матча
-            prompt = f"""
+            system_prompt = "Ты - опытный спортивный аналитик, создающий прогнозы на футбольные матчи на основе предоставленных данных."
+            user_prompt = f"""
             Напиши оригинальный прогноз на футбольный матч между командами {match_info['team1']} и {match_info['team2']} 
             в рамках турнира {match_info['tournament']}. 
             
@@ -195,25 +202,32 @@ def generate_match_prediction(match_info, min_symbols):
             - Состав {match_info['team1']}: {match_info['lineup_team1']}
             - Состав {match_info['team2']}: {match_info['lineup_team2']}
             
-            Прогноз должен содержать не менее {min_symbols} символов.
+            Прогноз должен содержать не менее {min_symbols} символов и быть оригинальным.
             """
             
-            response = openai.Completion.create(
-                engine="text-davinci-003",
-                prompt=prompt,
-                max_tokens=2000,
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo", # Используем gpt-3.5-turbo
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=1500,
                 n=1,
                 stop=None,
-                temperature=0.8,
+                temperature=0.7,
             )
             
+            prediction_text = response.choices[0].message['content'].strip()
             return {
                 'teams': f"{match_info['team1']} - {match_info['team2']}",
-                'prediction': response.choices[0].text.strip()
+                'prediction': prediction_text
             }
     except Exception as e:
         logger.error(f"Ошибка при генерации прогноза: {e}")
-        return "Ошибка при генерации прогноза."
+        # Попробуем получить более детальную информацию об ошибке OpenAI, если доступно
+        error_message = f"Ошибка OpenAI: {str(e)}"
+        logger.error(error_message)
+        return f"Ошибка при генерации прогноза. {error_message}"
 
 def process_matches(update: Update, context: CallbackContext) -> None:
     """Обрабатывает полученное сообщение и генерирует прогнозы."""
