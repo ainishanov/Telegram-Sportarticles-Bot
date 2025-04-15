@@ -3,12 +3,14 @@ import logging
 import re
 from datetime import datetime
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram import Update, Bot
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, Dispatcher
 import requests
 from bs4 import BeautifulSoup
 import openai
 import web_search
+import threading
+from flask import Flask, request
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,7 +22,17 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+PORT = int(os.environ.get('PORT', 5000))
+APP_URL = os.environ.get('APP_URL', 'https://your-app-name.onrender.com')
+
 openai.api_key = OPENAI_API_KEY
+
+# Создаем Flask приложение
+app = Flask(__name__)
+
+# Глобальные переменные для телеграм-бота
+bot = Bot(token=TELEGRAM_TOKEN)
+dispatcher = None
 
 def start(update: Update, context: CallbackContext) -> None:
     """Отправляет приветственное сообщение при команде /start."""
@@ -256,24 +268,70 @@ def process_matches(update: Update, context: CallbackContext) -> None:
     
     update.message.reply_text("Обработка завершена.")
 
-def main() -> None:
-    """Запускает бота."""
-    # Создаем Updater и передаем ему токен
-    updater = Updater(TELEGRAM_TOKEN)
+# Обработчик для webhook
+@app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
+def webhook():
+    """Обработчик для входящих сообщений через webhook."""
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return 'ok'
 
-    # Получаем диспетчер для регистрации обработчиков
-    dispatcher = updater.dispatcher
+# Маршрут для проверки работоспособности
+@app.route('/')
+def index():
+    return 'Бот работает!'
 
+# Маршрут для установки webhook
+@app.route('/set_webhook')
+def set_webhook():
+    s = bot.set_webhook(APP_URL + '/' + TELEGRAM_TOKEN)
+    if s:
+        return "Webhook установлен!"
+    else:
+        return "Ошибка установки webhook"
+
+def setup_bot():
+    """Настройка и запуск бота."""
+    global dispatcher
+    
+    # Создаем диспетчер
+    dispatcher = Dispatcher(bot, None, workers=0)
+    
     # Регистрируем обработчики команд
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("help", help_command))
-
+    
     # Обработчик обычных сообщений
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, process_matches))
+    
+    # Устанавливаем webhook
+    bot.set_webhook(APP_URL + '/' + TELEGRAM_TOKEN)
 
+def run_polling():
+    """Запуск бота в режиме polling (для локальной разработки)."""
+    updater = Updater(TELEGRAM_TOKEN)
+    dispatcher = updater.dispatcher
+    
+    # Регистрируем обработчики команд
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CommandHandler("help", help_command))
+    
+    # Обработчик обычных сообщений
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, process_matches))
+    
     # Запускаем бота
     updater.start_polling()
     updater.idle()
 
 if __name__ == '__main__':
-    main() 
+    # Режим работы в зависимости от среды
+    if os.environ.get('USE_POLLING', 'False').lower() == 'true':
+        # Локальный запуск с polling
+        print("Запуск бота в режиме polling...")
+        run_polling()
+    else:
+        # Запуск на сервере с webhook
+        print("Запуск бота в режиме webhook...")
+        setup_bot()
+        # Запуск Flask приложения
+        app.run(host='0.0.0.0', port=PORT) 
