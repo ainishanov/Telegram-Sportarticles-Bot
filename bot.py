@@ -567,48 +567,103 @@ def process_matches(update: Update, context: CallbackContext) -> None:
     update.message.reply_text("✅ Обработка завершена! Надеюсь, прогнозы будут полезны.")
 
 def parse_simple_message(text):
-    """Упрощенный парсинг текста о матче."""
+    """Упрощенный парсинг текста о матче из любого формата сообщения."""
     lines = text.strip().split('\n')
     
     matches = []
     date = "ближайшее время"
     
-    # Попытка найти дату в первой строке
-    if lines and "на " in lines[0].lower():
-        date_parts = lines[0].lower().split("на ")
-        if len(date_parts) > 1:
-            date = date_parts[1].strip()
+    # Ищем дату в тексте
+    date_patterns = [
+        r'на\s+(\d+\s+\w+)',  # на 20 марта
+        r'(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})',  # 20.03.2023, 20/03/2023, 20-03-2023
+        r'(\d{1,2}\s+\w+\w+)',  # 20 марта
+        r'(завтра|сегодня|послезавтра)'  # завтра, сегодня, послезавтра
+    ]
     
-    # Ищем матчи в формате "Команда1 - Команда2"
     for line in lines:
-        # Пропускаем строки с датами и пустые строки
-        if not line.strip() or line.lower().startswith("на "):
+        for pattern in date_patterns:
+            date_match = re.search(pattern, line, re.IGNORECASE)
+            if date_match:
+                date = date_match.group(1).strip()
+                break
+        if date != "ближайшее время":
+            break
+    
+    # Ищем команды в формате "Команда1 - Команда2" или похожем
+    # Более гибкий паттерн для поиска команд
+    team_patterns = [
+        r'([A-Za-zА-Яа-я0-9\s\-\(\)]+)\s*[-–—]\s*([A-Za-zА-Яа-я0-9\s\-\(\)]+)',  # Команда1 - Команда2 (с разными дефисами)
+        r'([A-Za-zА-Яа-я0-9\s\-\(\)]+)\s+(?:и|vs|против|and|versus)\s+([A-Za-zА-Яа-я0-9\s\-\(\)]+)',  # Команда1 vs/против/и Команда2
+    ]
+    
+    # Проходим по каждой строке текста
+    for line in lines:
+        # Пропускаем пустые строки
+        if not line.strip():
             continue
-            
-        # Ищем паттерн "Команда1 - Команда2"
-        match = re.search(r'([A-Za-zА-Яа-я0-9\s]+)\s*-\s*([A-Za-zА-Яа-я0-9\s]+)', line)
-        if match:
-            team1 = match.group(1).strip()
-            team2 = match.group(2).strip()
-            
-            # Попытка найти турнир после команд
-            tournament = "Неизвестный турнир"
-            # Проверяем есть ли текст после шаблона команд
-            rest_of_line = line[match.end():].strip()
-            if rest_of_line:
-                # Ищем текст до скобок, если они есть
-                tournament_match = re.search(r'([^(]+)', rest_of_line)
-                if tournament_match:
-                    tournament = tournament_match.group(1).strip()
-            
-            matches.append({
-                'teams': f"{team1} - {team2}",
-                'team1': team1,
-                'team2': team2,
-                'tournament': tournament,
-                'min_symbols': 1000,  # Фиксированная длина прогноза
-                'date': date
-            })
+        
+        # Проверяем каждый паттерн для команд
+        match_found = False
+        for pattern in team_patterns:
+            match = re.search(pattern, line)
+            if match:
+                team1 = match.group(1).strip()
+                team2 = match.group(2).strip()
+                
+                # Убираем лишние слова в названиях команд
+                team1 = re.sub(r'\b(матч|игра|встреча)\b', '', team1, flags=re.IGNORECASE).strip()
+                team2 = re.sub(r'\b(матч|игра|встреча)\b', '', team2, flags=re.IGNORECASE).strip()
+                
+                # Попытка найти турнир после команд
+                tournament = "Неизвестный турнир"
+                rest_of_line = line[match.end():].strip()
+                if rest_of_line:
+                    # Ищем текст до скобок или до конца строки
+                    tournament_match = re.search(r'([^(]+)', rest_of_line)
+                    if tournament_match:
+                        tournament = tournament_match.group(1).strip()
+                
+                # Проверяем что название команд не слишком короткие 
+                # (чтобы избежать ложных срабатываний)
+                if len(team1) > 1 and len(team2) > 1:
+                    matches.append({
+                        'teams': f"{team1} - {team2}",
+                        'team1': team1,
+                        'team2': team2,
+                        'tournament': tournament,
+                        'min_symbols': 1000,  # Фиксированная длина прогноза
+                        'date': date
+                    })
+                    match_found = True
+                    break
+        
+        # Если в этой строке нашли команды, переходим к следующей
+        if match_found:
+            continue
+    
+    # Если никаких матчей не найдено, попробуем найти хотя бы с одной командой
+    if not matches:
+        team_name_pattern = r'\b(?:команда|клуб|футбольный клуб|фк|фc)\s+([A-Za-zА-Яа-я0-9\s\-\(\)]+)\b'
+        team_names = []
+        
+        for line in lines:
+            for match in re.finditer(team_name_pattern, line, re.IGNORECASE):
+                team_name = match.group(1).strip()
+                if len(team_name) > 1 and team_name not in team_names:
+                    team_names.append(team_name)
+        
+        # Если нашлось 2 или больше команд, создаем из них пары
+        if len(team_names) >= 2:
+            for i in range(0, len(team_names) - 1, 2):
+                matches.append({
+                    'teams': f"{team_names[i]} - {team_names[i+1]}",
+                    'team1': team_names[i],
+                    'team2': team_names[i+1],
+                    'tournament': "Неизвестный турнир",
+                    'min_symbols': 1000,
+                    'date': date
+                })
     
     return {'date': date, 'matches': matches}
 
@@ -690,11 +745,13 @@ def process_text_or_buttons(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(contact_text, parse_mode='Markdown')
         return
     
-    # Проверяем, содержит ли сообщение информацию о матче
-    if " - " in message_text:  # Простая проверка на наличие команд
+    # Всегда сначала пробуем упрощенный парсинг для любого сообщения
+    parsed_data = parse_simple_message(message_text)
+    if parsed_data['matches']:
+        # Если нашли матчи, обрабатываем их
         process_simple_match(update, context)
     else:
-        # Пробуем старый формат для обратной совместимости
+        # Если не нашли матчи в упрощенном формате, пробуем старый формат
         process_matches(update, context)
 
 # Обработчик для webhook
