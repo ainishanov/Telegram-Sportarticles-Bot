@@ -35,6 +35,36 @@ app = Flask(__name__)
 bot = Bot(token=TELEGRAM_TOKEN)
 dispatcher = None
 
+def setup_bot():
+    """Настройка и запуск бота."""
+    global dispatcher
+    
+    # Создаем диспетчер если он еще не создан
+    if dispatcher is None:
+        # Создаем диспетчер
+        dispatcher = Dispatcher(bot, None, workers=0)
+        
+        # Регистрируем обработчики команд
+        dispatcher.add_handler(CommandHandler("start", start))
+        dispatcher.add_handler(CommandHandler("help", help_command))
+        dispatcher.add_handler(CommandHandler("menu", setup_menu))
+        dispatcher.add_handler(CommandHandler("example", example_command))
+        
+        # Обработчик обычных сообщений и текстовых кнопок
+        text_handler = MessageHandler(Filters.text & ~Filters.command, process_text_or_buttons)
+        dispatcher.add_handler(text_handler)
+    
+    # Устанавливаем webhook
+    logger.info("Запуск бота в режиме webhook...")
+    try:
+        bot.set_webhook(APP_URL + '/' + TELEGRAM_TOKEN)
+        logger.info(f"Вебхук установлен на {APP_URL}")
+    except TimedOut:
+        logger.warning("Не удалось установить вебхук автоматически из-за таймаута. "
+                      f"Пожалуйста, установите его вручную, перейдя по ссылке: {APP_URL}/set_webhook")
+    except Exception as e:
+        logger.error(f"Произошла ошибка при установке вебхука: {e}")
+
 def setup_menu(update: Update, context: CallbackContext) -> None:
     """Создает меню с кнопками команд."""
     keyboard = [
@@ -575,34 +605,6 @@ def set_webhook():
     else:
         return "Ошибка установки webhook"
 
-def setup_bot():
-    """Настройка и запуск бота."""
-    global dispatcher
-    
-    # Создаем диспетчер
-    dispatcher = Dispatcher(bot, None, workers=0)
-    
-    # Регистрируем обработчики команд
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CommandHandler("help", help_command))
-    dispatcher.add_handler(CommandHandler("menu", setup_menu))
-    dispatcher.add_handler(CommandHandler("example", example_command))
-    
-    # Обработчик обычных сообщений и текстовых кнопок
-    text_handler = MessageHandler(Filters.text & ~Filters.command, process_text_or_buttons)
-    dispatcher.add_handler(text_handler)
-    
-    # Устанавливаем webhook
-    logger.info("Запуск бота в режиме webhook...")
-    try:
-        bot.set_webhook(APP_URL + '/' + TELEGRAM_TOKEN)
-        logger.info(f"Вебхук установлен на {APP_URL}")
-    except TimedOut:
-        logger.warning("Не удалось установить вебхук автоматически из-за таймаута. "
-                       f"Пожалуйста, установите его вручную, перейдя по ссылке: {APP_URL}/set_webhook")
-    except Exception as e:
-        logger.error(f"Произошла ошибка при установке вебхука: {e}")
-
 def run_polling():
     """Запуск бота в режиме polling (для локальной разработки)."""
     updater = Updater(TELEGRAM_TOKEN)
@@ -620,6 +622,10 @@ def run_polling():
     # Запускаем бота
     updater.start_polling()
     updater.idle()
+
+# Инициализируем бота для gunicorn
+print("Инициализация бота для gunicorn...")
+setup_bot()  # Вызываем setup_bot для инициализации диспетчера и вебхука
 
 if __name__ == '__main__':
     # Режим работы в зависимости от среды
