@@ -12,14 +12,7 @@ import web_search
 import threading
 from flask import Flask, request
 from telegram.error import TimedOut
-
-# Добавляем импорт AISportsSearch
-try:
-    from ai_sports_search import AISportsSearch
-    ai_sports_available = True
-except ImportError:
-    ai_sports_available = False
-    logger.warning("Модуль AI Sports Search не доступен")
+from sports_api import TheSportsDB
 
 # Настройка логирования
 logging.basicConfig(
@@ -43,6 +36,9 @@ app = Flask(__name__)
 bot = Bot(token=TELEGRAM_TOKEN)
 dispatcher = None
 
+# Инициализация API для спортивных данных
+sports_api = TheSportsDB()
+
 def start(update: Update, context: CallbackContext) -> None:
     """Отправляет приветственное сообщение при команде /start."""
     update.message.reply_text(
@@ -50,19 +46,139 @@ def start(update: Update, context: CallbackContext) -> None:
         'Отправьте мне сообщение в формате:\n\n'
         'на [дата] (не позднее [дедлайн])\n\n'
         '1. [Команда1] - [Команда2]                [Турнир] ([мин_символов])\n'
-        '...'
+        '...\n\n'
+        'Или используйте команду /team [название команды] для получения информации о команде.'
     )
 
 def help_command(update: Update, context: CallbackContext) -> None:
     """Отправляет помощь при команде /help."""
     update.message.reply_text(
-        'Отправьте мне сообщение в формате:\n\n'
+        'Доступные команды:\n\n'
+        '/team [название команды] - Получить информацию о команде\n'
+        '/start - Показать приветственное сообщение\n\n'
+        'Для получения прогнозов отправьте сообщение в формате:\n'
         'на [дата] (не позднее [дедлайн])\n\n'
         '1. [Команда1] - [Команда2]                [Турнир] ([мин_символов])\n'
         '2. Все [X] матчей                [Турнир] ([мин_символов])\n'
-        '...\n\n'
-        'Или используйте команду /team [название команды] для получения актуальной информации о команде.'
+        '...'
     )
+
+def team_command(update: Update, context: CallbackContext) -> None:
+    """Обрабатывает команду /team для получения информации о команде."""
+    # Проверка наличия аргументов
+    if not context.args:
+        update.message.reply_text("Пожалуйста, укажите название команды. Например: /team Спартак")
+        return
+    
+    # Получение названия команды из аргументов
+    team_name = ' '.join(context.args)
+    update.message.reply_text(f"Ищу информацию о команде: {team_name}...")
+    
+    try:
+        # Словарь переводов для известных команд
+        team_translations = {
+            # Российские команды
+            "Спартак": "Spartak Moscow",
+            "ЦСКА": "CSKA Moscow",
+            "Зенит": "Zenit Saint Petersburg",
+            "Локомотив": "Lokomotiv Moscow",
+            "Динамо": "Dynamo Moscow",
+            "Краснодар": "FC Krasnodar",
+            "Ростов": "FC Rostov",
+            "Сочи": "PFC Sochi",
+            
+            # Популярные европейские команды
+            "Реал": "Real Madrid",
+            "Реал Мадрид": "Real Madrid",
+            "Барселона": "FC Barcelona",
+            "Атлетико": "Atletico Madrid",
+            "Бавария": "Bayern Munich",
+            "Боруссия": "Borussia Dortmund",
+            "ПСЖ": "Paris Saint-Germain",
+            "МЮ": "Manchester United",
+            "Манчестер Юнайтед": "Manchester United",
+            "Манчестер Сити": "Manchester City",
+            "Ливерпуль": "Liverpool FC",
+            "Челси": "Chelsea FC",
+            "Арсенал": "Arsenal FC",
+            "Тоттенхэм": "Tottenham Hotspur",
+            "Ювентус": "Juventus FC",
+            "Милан": "AC Milan",
+            "Интер": "Inter Milan",
+            "Наполи": "SSC Napoli",
+            "Рома": "AS Roma",
+            "Аякс": "Ajax Amsterdam",
+            "Порту": "FC Porto",
+            "Бенфика": "SL Benfica",
+            "Люцерн": "FC Luzern",
+            "Ксамакс": "Neuchatel Xamax"
+        }
+        
+        # Ищем английский перевод названия
+        english_name = team_translations.get(team_name, team_name)
+        
+        # Получаем информацию о команде
+        team_data = sports_api.search_team(english_name)
+        
+        if not team_data or 'teams' not in team_data or not team_data['teams']:
+            # Если не найдено, пробуем искать по первому слову
+            first_word = english_name.split()[0]
+            team_data = sports_api.search_team(first_word)
+            
+            if not team_data or 'teams' not in team_data or not team_data['teams']:
+                update.message.reply_text(f"К сожалению, не удалось найти информацию о команде {team_name}.")
+                return
+        
+        # Получаем детальную информацию
+        team = team_data['teams'][0]
+        team_id = team['idTeam']
+        
+        # Формируем сообщение с базовой информацией
+        message = f"*{team['strTeam']}*\n\n"
+        message += f"🌍 Страна: {team.get('strCountry', 'Н/Д')}\n"
+        message += f"🏆 Лига: {team.get('strLeague', 'Н/Д')}\n"
+        message += f"🏟️ Стадион: {team.get('strStadium', 'Н/Д')}\n"
+        message += f"📅 Год основания: {team.get('intFormedYear', 'Н/Д')}\n"
+        message += f"🌐 Сайт: {team.get('strWebsite', 'Н/Д')}\n\n"
+        
+        # Отправляем первую часть информации
+        update.message.reply_text(message, parse_mode='Markdown')
+        
+        # Получаем информацию о последних матчах
+        matches = sports_api.get_last_events_by_team(team_id)
+        matches_message = "*Последние матчи:*\n"
+        
+        if matches and 'results' in matches and matches['results']:
+            for match in matches['results'][:5]:
+                date = match.get('dateEvent', 'Н/Д')
+                home = match.get('strHomeTeam', 'Н/Д')
+                away = match.get('strAwayTeam', 'Н/Д')
+                home_score = match.get('intHomeScore', '?')
+                away_score = match.get('intAwayScore', '?')
+                matches_message += f"- {date}: {home} {home_score}:{away_score} {away}\n"
+        else:
+            matches_message += "Информация о последних матчах недоступна\n"
+        
+        update.message.reply_text(matches_message, parse_mode='Markdown')
+        
+        # Получаем информацию об игроках команды
+        players = sports_api.list_all_players_in_team(team_id)
+        players_message = "*Состав команды:*\n"
+        
+        if players and 'player' in players and players['player']:
+            for player in players['player'][:10]:
+                name = player.get('strPlayer', 'Н/Д')
+                position = player.get('strPosition', 'Н/Д')
+                nationality = player.get('strNationality', 'Н/Д')
+                players_message += f"- {name} ({position}, {nationality})\n"
+        else:
+            players_message += "Информация о составе недоступна (требуется платная версия API)\n"
+        
+        update.message.reply_text(players_message, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении информации о команде {team_name}: {e}")
+        update.message.reply_text(f"Произошла ошибка при получении информации о команде {team_name}.")
 
 def parse_match_text(text):
     """Парсит текст сообщения с матчами и возвращает структурированные данные."""
@@ -413,109 +529,6 @@ def set_webhook():
     else:
         return "Ошибка установки webhook"
 
-# Добавляем новую команду для получения актуальной информации о команде
-def team_command(update: Update, context: CallbackContext) -> None:
-    """Отправляет актуальную информацию о команде."""
-    if not context.args:
-        update.message.reply_text('Пожалуйста, укажите название команды.\nПример: /team Люцерн')
-        return
-    
-    team_name = ' '.join(context.args)
-    
-    # Проверяем доступен ли AI поиск
-    if ai_sports_available:
-        # Словарь для перевода популярных команд на английский
-        team_translations = {
-            "Спартак": "Spartak Moscow",
-            "ЦСКА": "CSKA Moscow",
-            "Зенит": "Zenit Saint Petersburg",
-            "Локомотив": "Lokomotiv Moscow",
-            "Динамо": "Dynamo Moscow",
-            "Краснодар": "FC Krasnodar",
-            "Ростов": "FC Rostov",
-            "Сочи": "PFC Sochi",
-            "Реал Мадрид": "Real Madrid",
-            "Барселона": "FC Barcelona",
-            "Атлетико": "Atletico Madrid",
-            "Бавария": "Bayern Munich",
-            "Боруссия Д": "Borussia Dortmund",
-            "Боруссия": "Borussia Dortmund",
-            "ПСЖ": "Paris Saint-Germain",
-            "Манчестер Юнайтед": "Manchester United",
-            "Манчестер Сити": "Manchester City",
-            "Ливерпуль": "Liverpool FC",
-            "Челси": "Chelsea FC",
-            "Арсенал": "Arsenal FC",
-            "Тоттенхэм": "Tottenham Hotspur",
-            "Ювентус": "Juventus FC",
-            "Милан": "AC Milan",
-            "Интер": "Inter Milan",
-            "Наполи": "SSC Napoli",
-            "Рома": "AS Roma",
-            "Аякс": "Ajax Amsterdam",
-            "Порту": "FC Porto",
-            "Бенфика": "SL Benfica",
-            "Люцерн": "FC Luzern",
-            "Ксамакс": "Neuchatel Xamax",
-            "Брюгге": "Club Brugge",
-            "Бреда": "NAC Breda",
-            "Кельн": "FC Koln",
-            "Верль": "SC Verl",
-            "Болгария": "Bulgaria",
-            "Ирландия": "Ireland",
-            "Косово": "Kosovo", 
-            "Исландия": "Iceland"
-        }
-        
-        # Переводим название команды на английский, если оно есть в словаре
-        english_team_name = team_translations.get(team_name, team_name)
-        
-        try:
-            update.message.reply_text(f"Поиск актуальной информации о команде {team_name}...")
-            
-            # Получаем информацию через AI
-            ai_search = AISportsSearch()
-            team_info = ai_search.get_team_info(team_name, english_team_name)
-            
-            # Отправляем результаты
-            last_matches = team_info.get("last_matches", f"Нет информации о последних матчах {team_name}")
-            lineup = team_info.get("lineup", f"Нет информации о составе {team_name}")
-            manager = team_info.get("manager", "Информация о тренере отсутствует")
-            position = team_info.get("league_position", "Информация о позиции в турнирной таблице отсутствует")
-            
-            result_text = f"*Информация о команде {team_name}*\n\n"
-            result_text += f"*Главный тренер:* {manager}\n"
-            result_text += f"*Текущая позиция:* {position}\n\n"
-            result_text += f"*{last_matches}*\n\n"
-            result_text += f"*{lineup}*\n\n"
-            
-            # Отправляем информацию
-            update.message.reply_text(result_text, parse_mode='Markdown')
-            
-        except Exception as e:
-            logger.error(f"Ошибка при получении информации о команде {team_name}: {e}")
-            update.message.reply_text(f"Произошла ошибка при поиске информации о команде {team_name}.")
-            
-            # Попробуем использовать обычный поиск как запасной вариант
-            try:
-                team_info = web_search.get_team_info(team_name)
-                update.message.reply_text(f"Информация о команде {team_name}:")
-                update.message.reply_text(team_info['last_matches'])
-                update.message.reply_text(team_info['lineup'])
-            except Exception as e2:
-                logger.error(f"Ошибка при резервном поиске информации о команде {team_name}: {e2}")
-                update.message.reply_text("К сожалению, информация о команде не найдена.")
-    else:
-        # Если AI недоступен, используем обычный поиск
-        try:
-            team_info = web_search.get_team_info(team_name)
-            update.message.reply_text(f"Информация о команде {team_name}:")
-            update.message.reply_text(team_info['last_matches'])
-            update.message.reply_text(team_info['lineup'])
-        except Exception as e:
-            logger.error(f"Ошибка при получении информации о команде {team_name}: {e}")
-            update.message.reply_text(f"Произошла ошибка при поиске информации о команде {team_name}.")
-
 def setup_bot():
     """Настройка и запуск бота."""
     global dispatcher
@@ -526,8 +539,6 @@ def setup_bot():
     # Регистрируем обработчики команд
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("help", help_command))
-    
-    # Добавляем новый обработчик команды /team
     dispatcher.add_handler(CommandHandler("team", team_command))
     
     # Обработчик обычных сообщений
@@ -552,8 +563,6 @@ def run_polling():
     # Регистрируем обработчики команд
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("help", help_command))
-    
-    # Добавляем новый обработчик команды /team
     dispatcher.add_handler(CommandHandler("team", team_command))
     
     # Обработчик обычных сообщений
