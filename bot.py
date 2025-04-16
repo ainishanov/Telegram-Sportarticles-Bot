@@ -544,7 +544,6 @@ def process_text_or_buttons(update: Update, context: CallbackContext) -> None:
 *Контактная информация:*
 
 Разработчик: @ainishanov
-Сайт: [sportarticles.ru](https://sportarticles.ru)
 
 По всем вопросам обращайтесь к разработчику.
         """
