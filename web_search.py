@@ -4,6 +4,8 @@ import logging
 import re
 from datetime import datetime
 import urllib.parse
+import time
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +16,12 @@ HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
+# Ограничения для API запросов
+MAX_RETRIES = 3
+RETRY_DELAY = 2  # секунды
+REQUEST_TIMEOUT = 10  # секунды
+MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10 MB
+
 # Словарь для преобразования названий турниров в правильные запросы к API
 TOURNAMENT_MAPPINGS = {
     "ЧМ-2026. Европа. Квалификация": "FIFA World Cup qualification (UEFA)",
@@ -21,9 +29,34 @@ TOURNAMENT_MAPPINGS = {
     "Клубы. Товарищеский матч": "Club Friendlies"
 }
 
+def validate_api_params(params):
+    """
+    Проверяет и очищает параметры запроса к API от потенциально опасных значений.
+    
+    Args:
+        params: Словарь параметров запроса
+    
+    Returns:
+        dict: Очищенный словарь параметров
+    """
+    if not params:
+        return {}
+    
+    validated_params = {}
+    for key, value in params.items():
+        # Убеждаемся, что ключи и значения - строки
+        key_str = str(key)
+        value_str = str(value)
+        
+        # Очищаем значения от потенциально опасных символов
+        clean_value = re.sub(r'[^\w\s\-\.,]', '', value_str)
+        validated_params[key_str] = clean_value
+        
+    return validated_params
+
 def api_request(endpoint, params=None):
     """
-    Выполняет запрос к API TheSportsDB.
+    Выполняет запрос к API TheSportsDB с проверками безопасности.
     
     Args:
         endpoint: Эндпоинт API
@@ -32,19 +65,55 @@ def api_request(endpoint, params=None):
     Returns:
         dict: Ответ от API в формате JSON
     """
-    try:
-        url = f"{API_BASE_URL}/{API_KEY}/{endpoint}"
-        response = requests.get(url, params=params, headers=HEADERS)
-        
-        if response.status_code != 200:
-            logger.error(f"Ошибка API: {response.status_code}, URL: {url}, Ответ: {response.text}")
+    # Проверяем и очищаем параметры
+    validated_params = validate_api_params(params)
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            # Ограничиваем длину URL
+            endpoint = endpoint[:100]  # Ограничение длины эндпоинта
+            url = f"{API_BASE_URL}/{API_KEY}/{endpoint}"
+            
+            # Устанавливаем таймаут для защиты от зависаний
+            response = requests.get(
+                url, 
+                params=validated_params, 
+                headers=HEADERS, 
+                timeout=REQUEST_TIMEOUT
+            )
+            
+            # Проверка статус-кода
+            if response.status_code != 200:
+                logger.error(f"Ошибка API: {response.status_code}, URL: {url}, Ответ: {response.text[:500]}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_DELAY)
+                    continue
+                return None
+            
+            # Проверка размера ответа
+            if len(response.content) > MAX_RESPONSE_SIZE:
+                logger.error(f"Ответ API слишком большой: {len(response.content)} байт")
+                return None
+            
+            # Безопасный JSON парсинг
+            try:
+                data = response.json()
+                return data
+            except json.JSONDecodeError as e:
+                logger.error(f"Ошибка при разборе JSON: {e}")
+                return None
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при запросе к API: {e}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"Непредвиденная ошибка при запросе к API: {e}")
             return None
-        
-        data = response.json()
-        return data
-    except Exception as e:
-        logger.error(f"Ошибка при запросе к API: {e}")
-        return None
+    
+    return None  # В случае всех неудачных попыток
 
 def search_team(team_name):
     """
@@ -56,6 +125,14 @@ def search_team(team_name):
     Returns:
         dict: Данные о команде
     """
+    # Проверка и очистка входных данных
+    if not team_name or not isinstance(team_name, str):
+        logger.warning("Получено некорректное название команды")
+        return None
+    
+    # Ограничиваем длину названия команды
+    team_name = team_name[:50]
+    
     endpoint = "searchteams.php"
     params = {"t": team_name}
     
@@ -130,7 +207,7 @@ def get_team_players(team_name):
 
 def convert_date_format(date_str):
     """
-    Преобразует дату из формата "день месяц" в формат "YYYY-MM-DD".
+    Преобразует дату из формата "день месяц" в формат "YYYY-MM-DD" с проверками безопасности.
     
     Args:
         date_str: Дата в формате "21 марта"
@@ -138,6 +215,13 @@ def convert_date_format(date_str):
     Returns:
         str: Дата в формате "YYYY-MM-DD"
     """
+    if not date_str or not isinstance(date_str, str):
+        logger.warning("Получена некорректная дата")
+        return datetime.now().strftime("%Y-%m-%d")
+    
+    # Ограничиваем длину строки даты
+    date_str = date_str[:20]
+    
     try:
         months = {
             'января': '01', 'февраля': '02', 'марта': '03', 'апреля': '04',
@@ -145,11 +229,33 @@ def convert_date_format(date_str):
             'сентября': '09', 'октября': '10', 'ноября': '11', 'декабря': '12'
         }
         
-        day, month_name = date_str.split()
-        month = months.get(month_name.lower(), '01')
+        # Безопасное разделение строки
+        parts = date_str.split()
+        if len(parts) < 2:
+            logger.warning(f"Неверный формат даты: {date_str}")
+            return datetime.now().strftime("%Y-%m-%d")
+            
+        day = parts[0]
+        month_name = parts[1].lower()
+        
+        # Проверка на числовой день
+        if not day.isdigit():
+            logger.warning(f"День не является числом: {day}")
+            day = "1"
+        
+        month = months.get(month_name, '01')
         current_year = datetime.now().year
         
-        return f"{current_year}-{month}-{day.zfill(2)}"
+        # Проверка валидности дня
+        day_int = int(day)
+        if day_int < 1 or day_int > 31:
+            logger.warning(f"Некорректный день: {day}")
+            day = "1"
+        
+        # Форматируем день с ведущим нулем
+        day = day.zfill(2)
+        
+        return f"{current_year}-{month}-{day}"
     
     except Exception as e:
         logger.error(f"Ошибка при преобразовании даты: {e}")

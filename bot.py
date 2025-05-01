@@ -1,6 +1,9 @@
 import os
 import logging
 import re
+import time
+import hashlib
+import secrets
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
@@ -10,7 +13,7 @@ from bs4 import BeautifulSoup
 import openai
 import web_search
 import threading
-from flask import Flask, request
+from flask import Flask, request, abort
 from telegram.error import TimedOut
 
 # Настройка логирования
@@ -22,9 +25,26 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_TOKEN:
+    logger.error("TELEGRAM_BOT_TOKEN не найден. Убедитесь, что файл .env существует и содержит TELEGRAM_BOT_TOKEN.")
+    raise ValueError("TELEGRAM_BOT_TOKEN не найден в переменных окружения")
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    logger.error("OPENAI_API_KEY не найден. Убедитесь, что файл .env существует и содержит OPENAI_API_KEY.")
+    raise ValueError("OPENAI_API_KEY не найден в переменных окружения")
+
+# Генерируем уникальный путь для webhook для дополнительной безопасности
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH") or secrets.token_hex(16)
+
 PORT = int(os.environ.get('PORT', 5000))
 APP_URL = os.environ.get('APP_URL', 'https://your-app-name.onrender.com')
+
+# Ограничения для защиты от DoS атак
+MAX_INPUT_LENGTH = 5000  # Максимальная длина входного сообщения
+MAX_MATCHES_ALLOWED = 10  # Максимальное количество матчей для обработки
+RATE_LIMIT_PERIOD = 60   # Период ограничения в секундах
+MAX_REQUESTS_PER_PERIOD = 5  # Максимальное количество запросов в период
 
 openai.api_key = OPENAI_API_KEY
 
@@ -39,6 +59,42 @@ dispatcher = None
 processing_messages = {}
 # Механизм блокировки для безопасной работы с processing_messages
 message_lock = threading.Lock()
+
+# Защита от спама и DoS атак
+user_requests = {}
+user_rate_limit_lock = threading.Lock()
+
+def is_rate_limited(user_id):
+    """Проверяет, не превысил ли пользователь лимит запросов."""
+    current_time = time.time()
+    
+    with user_rate_limit_lock:
+        if user_id not in user_requests:
+            user_requests[user_id] = []
+        
+        # Удаляем устаревшие записи
+        user_requests[user_id] = [t for t in user_requests[user_id] if current_time - t < RATE_LIMIT_PERIOD]
+        
+        # Проверяем лимит
+        if len(user_requests[user_id]) >= MAX_REQUESTS_PER_PERIOD:
+            return True
+        
+        # Добавляем новый запрос
+        user_requests[user_id].append(current_time)
+        return False
+
+def sanitize_input(text):
+    """Очищает входной текст от потенциально опасных последовательностей."""
+    if not text:
+        return ""
+    
+    # Ограничиваем длину входных данных
+    if len(text) > MAX_INPUT_LENGTH:
+        return text[:MAX_INPUT_LENGTH]
+    
+    # Убираем управляющие символы
+    sanitized = re.sub(r'[\x00-\x1F\x7F]', '', text)
+    return sanitized
 
 def setup_bot():
     """Настройка и запуск бота."""
@@ -61,10 +117,11 @@ def setup_bot():
         dispatcher.add_handler(text_handler)
     
     # Устанавливаем webhook
-    logger.info("Запуск бота в режиме webhook...")
+    webhook_url = f"{APP_URL}/{WEBHOOK_PATH}"
+    logger.info(f"Запуск бота в режиме webhook на {webhook_url}...")
     try:
-        bot.set_webhook(APP_URL + '/' + TELEGRAM_TOKEN)
-        logger.info(f"Вебхук установлен на {APP_URL}")
+        bot.set_webhook(webhook_url)
+        logger.info(f"Вебхук установлен на {webhook_url}")
     except TimedOut:
         logger.warning("Не удалось установить вебхук автоматически из-за таймаута. "
                       f"Пожалуйста, установите его вручную, перейдя по ссылке: {APP_URL}/set_webhook")
@@ -848,6 +905,19 @@ def process_text_or_buttons(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     message_id = update.message.message_id
     
+    # Проверка на ограничение скорости запросов
+    if is_rate_limited(user_id):
+        update.message.reply_text(
+            "⚠️ Вы отправляете слишком много запросов. Пожалуйста, подождите немного и попробуйте снова."
+        )
+        return
+    
+    # Безопасная обработка входных данных
+    message_text = sanitize_input(message_text)
+    if not message_text:
+        update.message.reply_text("⚠️ Получено пустое сообщение. Пожалуйста, отправьте текст запроса.")
+        return
+    
     # Создаем уникальный идентификатор для сообщения
     message_key = f"{user_id}_{message_id}"
     
@@ -904,13 +974,31 @@ def cleanup_processing_messages():
             logger.warning(f"Удалено устаревшее сообщение {key} из обрабатываемых.")
 
 # Добавим периодическую очистку устаревших сообщений в webhook-обработчик
-@app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
+@app.route('/' + WEBHOOK_PATH, methods=['POST'])
 def webhook():
     """Обработчик для входящих сообщений через webhook."""
+    # Проверка IP-адреса запроса для защиты от атак
+    if request.headers.get('X-Forwarded-For'):
+        ip = request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    else:
+        ip = request.remote_addr
+        
+    logger.info(f"Получен webhook запрос от {ip}")
+    
+    # Проверяем, что запрос пришел от Telegram
+    try:
+        update_json = request.get_json(force=True)
+        if not update_json:
+            logger.warning("Получен пустой JSON в webhook запросе")
+            abort(403)
+    except Exception as e:
+        logger.error(f"Ошибка при разборе JSON в webhook запросе: {e}")
+        abort(400)
+    
     # Периодически очищаем устаревшие записи
     cleanup_processing_messages()
     
-    update = Update.de_json(request.get_json(force=True), bot)
+    update = Update.de_json(update_json, bot)
     dispatcher.process_update(update)
     return 'ok'
 
@@ -922,9 +1010,10 @@ def index():
 # Маршрут для установки webhook
 @app.route('/set_webhook')
 def set_webhook():
-    s = bot.set_webhook(APP_URL + '/' + TELEGRAM_TOKEN)
+    webhook_url = f"{APP_URL}/{WEBHOOK_PATH}"
+    s = bot.set_webhook(webhook_url)
     if s:
-        return "Webhook установлен!"
+        return f"Webhook установлен на {webhook_url}!"
     else:
         return "Ошибка установки webhook"
 
@@ -960,6 +1049,7 @@ if __name__ == '__main__':
     else:
         # Запуск на сервере с webhook
         print("Запуск бота в режиме webhook...")
+        print(f"Используется путь webhook: /{WEBHOOK_PATH}")
         setup_bot()
-        # Запуск Flask приложения
-        app.run(host='0.0.0.0', port=PORT) 
+        # Запуск Flask приложения с опциями безопасности
+        app.run(host='0.0.0.0', port=PORT, threaded=True) 
