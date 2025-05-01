@@ -35,6 +35,11 @@ app = Flask(__name__)
 bot = Bot(token=TELEGRAM_TOKEN)
 dispatcher = None
 
+# Словарь для отслеживания обрабатываемых сообщений, чтобы избежать дублирования
+processing_messages = {}
+# Механизм блокировки для безопасной работы с processing_messages
+message_lock = threading.Lock()
+
 def setup_bot():
     """Настройка и запуск бота."""
     global dispatcher
@@ -49,6 +54,7 @@ def setup_bot():
         dispatcher.add_handler(CommandHandler("help", help_command))
         dispatcher.add_handler(CommandHandler("menu", setup_menu))
         dispatcher.add_handler(CommandHandler("example", example_command))
+        dispatcher.add_handler(CommandHandler("cancel", cancel_processing))
         
         # Обработчик обычных сообщений и текстовых кнопок
         text_handler = MessageHandler(Filters.text & ~Filters.command, process_text_or_buttons)
@@ -69,7 +75,7 @@ def setup_menu(update: Update, context: CallbackContext) -> None:
     """Создает меню с кнопками команд."""
     keyboard = [
         [KeyboardButton("/start"), KeyboardButton("/help")],
-        [KeyboardButton("/example")]
+        [KeyboardButton("/example"), KeyboardButton("/cancel")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     update.message.reply_text(
@@ -128,13 +134,21 @@ def start(update: Update, context: CallbackContext) -> None:
 Команда1 - Команда2
 ```
 
+Для ограничения количества статей:
+```
+5 статей
+Команда1 - Команда2
+Команда3 - Команда4
+...
+```
+
 📋 Отправь /help для подробной инструкции.
     """
     
     # Добавляем меню с кнопками
     keyboard = [
         [KeyboardButton("/help"), KeyboardButton("/example")],
-        [KeyboardButton("Контакты")]
+        [KeyboardButton("Контакты"), KeyboardButton("/cancel")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -165,33 +179,76 @@ def help_command(update: Update, context: CallbackContext) -> None:
 Спартак - ЦСКА РПЛ
 ```
 
-4️⃣ *Примечания:*
-• Бот автоматически определяет команды из вашего сообщения
-• Прогноз будет содержать около 1000 символов
-• Обработка обычно занимает 30-60 секунд
+4️⃣ *Для большого количества матчей:*
+Вы можете ограничить количество статей, например:
+```
+5 статей
+Спартак - ЦСКА
+Барселона - Реал Мадрид
+Ливерпуль - Манчестер Юнайтед
+...
+```
+
+5️⃣ *Отмена обработки:*
+Если бот отправляет слишком много статей, используйте команду:
+```
+/cancel
+```
 
 📢 *Команды:*
 /start - Запуск бота
 /help - Показать эту справку
 /example - Получить готовый пример запроса
 /menu - Показать меню кнопок
+/cancel - Отменить текущую обработку матчей
     """
     
     # Добавляем меню с кнопками
     keyboard = [
         [KeyboardButton("/start"), KeyboardButton("/example")],
-        [KeyboardButton("Контакты")]
+        [KeyboardButton("Контакты"), KeyboardButton("/cancel")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     update.message.reply_text(help_text, parse_mode='Markdown', reply_markup=reply_markup)
 
+def cancel_processing(update: Update, context: CallbackContext) -> None:
+    """Отменяет обработку текущих сообщений пользователя."""
+    user_id = update.effective_user.id
+    canceled = False
+    
+    with message_lock:
+        keys_to_delete = []
+        for key in processing_messages.keys():
+            if key.startswith(f"{user_id}_"):
+                keys_to_delete.append(key)
+                canceled = True
+        
+        for key in keys_to_delete:
+            del processing_messages[key]
+    
+    if canceled:
+        logger.info(f"Пользователь {user_id} отменил обработку своих сообщений.")
+        update.message.reply_text("🛑 Обработка ваших запросов отменена. Вы можете отправить новый запрос.")
+    else:
+        update.message.reply_text("ℹ️ В данный момент нет активных запросов для отмены.")
+
 def parse_match_text(text):
     """Парсит текст сообщения с матчами и возвращает структурированные данные."""
     try:
+        # Проверка на ограничение количества статей в сообщении
+        max_matches_pattern = r'(\d+)\s+стат(ей|ьи)'  # Например, "5 статей" или "10 статей"
+        max_matches = 5  # По умолчанию ограничение - 5 матчей
+        
+        max_matches_match = re.search(max_matches_pattern, text, re.IGNORECASE)
+        if max_matches_match:
+            max_matches = int(max_matches_match.group(1))
+            logger.info(f"Установлено ограничение на количество статей в parse_match_text: {max_matches}")
+    
         # Разделяем по датам
         date_blocks = []
         current_block = {'date': '', 'deadline': '', 'matches': []}
+        total_matches = 0  # Счетчик всех матчей
         
         for line in text.split('\n'):
             line = line.strip()
@@ -210,6 +267,10 @@ def parse_match_text(text):
                 }
                 continue
             
+            # Если достигли максимального количества матчей, прекращаем обработку
+            if total_matches >= max_matches:
+                break
+                
             # Поиск матчей
             match_info = re.match(r'(\d+)\. (.+?)(\(.+?\))?$', line)
             if match_info:
@@ -226,14 +287,17 @@ def parse_match_text(text):
                 if all_matches:
                     count = int(all_matches.group(1))
                     tournament = all_matches.group(2).strip()
-                    current_block['matches'].append({
-                        'number': number,
-                        'is_all_matches': True,
-                        'count': count,
-                        'tournament': tournament,
-                        'min_symbols': min_symbols,
-                        'date': current_block['date']  # Добавляем дату из текущего блока
-                    })
+                    # Ограничиваем количество "всех матчей" доступным лимитом
+                    if total_matches < max_matches:
+                        current_block['matches'].append({
+                            'number': number,
+                            'is_all_matches': True,
+                            'count': min(count, max_matches - total_matches),  # Ограничиваем счетчик
+                            'tournament': tournament,
+                            'min_symbols': min_symbols,
+                            'date': current_block['date']  # Добавляем дату из текущего блока
+                        })
+                        total_matches += 1  # Считаем как один матч в общем счетчике
                 else:
                     # Обычный матч
                     teams_tournament = match_text.split('                ')
@@ -248,6 +312,7 @@ def parse_match_text(text):
                             'min_symbols': min_symbols,
                             'date': current_block['date']  # Добавляем дату из текущего блока
                         })
+                        total_matches += 1
         
         # Добавляем последний блок
         if current_block['date']:
@@ -496,6 +561,15 @@ def process_matches(update: Update, context: CallbackContext) -> None:
             )
             return
     
+    # Проверка на ограничение количества статей в сообщении
+    max_matches_pattern = r'(\d+)\s+стат(ей|ьи)'  # Например, "5 статей" или "10 статей"
+    max_matches = 5  # По умолчанию ограничение - 5 матчей
+    
+    max_matches_match = re.search(max_matches_pattern, message_text, re.IGNORECASE)
+    if max_matches_match:
+        max_matches = int(max_matches_match.group(1))
+        logger.info(f"Установлено ограничение на количество статей: {max_matches}")
+    
     # Парсинг текста сообщения
     date_blocks = parse_match_text(content)
     if not date_blocks:
@@ -510,16 +584,29 @@ def process_matches(update: Update, context: CallbackContext) -> None:
         )
         return
     
+    # Счетчик обработанных матчей
+    processed_matches = 0
+    
     for date_block in date_blocks:
         update.message.reply_text(f"📅 Обрабатываю матчи на {date_block['date']} (дедлайн: {date_block['deadline']})...")
         
-        for match in date_block['matches']:
+        # Ограничиваем количество матчей для обработки в этом блоке
+        matches_in_block = date_block['matches'][:max(0, max_matches - processed_matches)]
+        
+        if not matches_in_block:
+            update.message.reply_text("📊 Достигнуто максимальное количество матчей для обработки.")
+            break
+            
+        # Отображаем сводку о количестве найденных и обрабатываемых матчей
+        update.message.reply_text(f"📊 Найдено матчей в блоке: {len(date_block['matches'])}, обрабатываю: {len(matches_in_block)}")
+        
+        for idx, match in enumerate(matches_in_block, 1):
             try:
                 # Информируем пользователя о прогрессе
                 if match.get('is_all_matches', False):
-                    update.message.reply_text(f"⚽ Ищу информацию о всех матчах турнира {match['tournament']}...")
+                    update.message.reply_text(f"⚽ Ищу информацию о всех матчах турнира {match['tournament']}... ({processed_matches + idx}/{max_matches})")
                 else:
-                    update.message.reply_text(f"⚽ Ищу информацию о матче {match['teams']}...")
+                    update.message.reply_text(f"⚽ Ищу информацию о матче {match['teams']}... ({processed_matches + idx}/{max_matches})")
                 
                 # Поиск информации
                 match_info = search_match_info(match)
@@ -532,8 +619,8 @@ def process_matches(update: Update, context: CallbackContext) -> None:
                 
                 # Отправка результатов
                 if isinstance(predictions, list):
-                    for idx, pred in enumerate(predictions, 1):
-                        message = f"📊 *Прогноз #{idx} для {pred['teams']}:*\n\n{pred['prediction']}"
+                    for pred_idx, pred in enumerate(predictions, 1):
+                        message = f"📊 *Прогноз #{pred_idx} ({processed_matches + idx}/{max_matches}) для {pred['teams']}:*\n\n{pred['prediction']}"
                         # Разбиваем сообщение, если оно слишком длинное
                         if len(message) > 4000:
                             parts = [message[i:i+4000] for i in range(0, len(message), 4000)]
@@ -545,7 +632,7 @@ def process_matches(update: Update, context: CallbackContext) -> None:
                         else:
                             update.message.reply_text(message, parse_mode='Markdown')
                 else:
-                    message = f"📊 *Прогноз для {predictions['teams']}:*\n\n{predictions['prediction']}"
+                    message = f"📊 *Прогноз ({processed_matches + idx}/{max_matches}) для {predictions['teams']}:*\n\n{predictions['prediction']}"
                     # Разбиваем сообщение, если оно слишком длинное
                     if len(message) > 4000:
                         parts = [message[i:i+4000] for i in range(0, len(message), 4000)]
@@ -563,8 +650,16 @@ def process_matches(update: Update, context: CallbackContext) -> None:
                     f"⚠️ Произошла ошибка при обработке матча #{match['number']}.\n"
                     f"Пожалуйста, проверьте правильность введенных данных или попробуйте позже."
                 )
+        
+        # Увеличиваем счетчик обработанных матчей
+        processed_matches += len(matches_in_block)
+        
+        # Проверяем, не достигли ли мы лимита
+        if processed_matches >= max_matches:
+            update.message.reply_text("📊 Достигнуто максимальное количество матчей для обработки.")
+            break
     
-    update.message.reply_text("✅ Обработка завершена! Надеюсь, прогнозы будут полезны.")
+    update.message.reply_text(f"✅ Обработка завершена! Обработано матчей: {processed_matches}. Надеюсь, прогнозы будут полезны.")
 
 def parse_simple_message(text):
     """Упрощенный парсинг текста о матче из любого формата сообщения."""
@@ -590,6 +685,16 @@ def parse_simple_message(text):
         if date != "ближайшее время":
             break
     
+    # Проверка на ограничение количества статей
+    max_matches_pattern = r'(\d+)\s+стат(ей|ьи)'  # Например, "5 статей" или "10 статей"
+    max_matches = 5  # По умолчанию ограничение - 5 матчей
+    
+    for line in lines:
+        max_matches_match = re.search(max_matches_pattern, line, re.IGNORECASE)
+        if max_matches_match:
+            max_matches = int(max_matches_match.group(1))
+            break
+    
     # Ищем команды в формате "Команда1 - Команда2" или похожем
     # Более гибкий паттерн для поиска команд
     team_patterns = [
@@ -603,6 +708,10 @@ def parse_simple_message(text):
         if not line.strip():
             continue
         
+        # Прерываем цикл, если достигли ограничения по количеству матчей
+        if len(matches) >= max_matches:
+            break
+            
         # Проверяем каждый паттерн для команд
         match_found = False
         for pattern in team_patterns:
@@ -654,8 +763,9 @@ def parse_simple_message(text):
                     team_names.append(team_name)
         
         # Если нашлось 2 или больше команд, создаем из них пары
+        # Ограничиваем количество пар максимальным числом матчей
         if len(team_names) >= 2:
-            for i in range(0, len(team_names) - 1, 2):
+            for i in range(0, min(len(team_names) - 1, max_matches * 2 - 1), 2):
                 matches.append({
                     'teams': f"{team_names[i]} - {team_names[i+1]}",
                     'team1': team_names[i],
@@ -665,7 +775,7 @@ def parse_simple_message(text):
                     'date': date
                 })
     
-    return {'date': date, 'matches': matches}
+    return {'date': date, 'matches': matches[:max_matches]}  # Гарантируем ограничение по количеству матчей
 
 def process_simple_match(update: Update, context: CallbackContext) -> None:
     """Обрабатывает простое сообщение от пользователя и генерирует прогноз."""
@@ -687,9 +797,12 @@ def process_simple_match(update: Update, context: CallbackContext) -> None:
         )
         return
     
+    # Информируем пользователя о количестве найденных матчей
+    update.message.reply_text(f"📊 Найдено матчей: {len(matches)}. Начинаю обработку...")
+    
     # Обрабатываем каждый найденный матч
-    for match in matches:
-        update.message.reply_text(f"⚽ Создаю прогноз на матч {match['teams']}...")
+    for i, match in enumerate(matches, 1):
+        update.message.reply_text(f"⚽ Создаю прогноз на матч {i}/{len(matches)}: {match['teams']}...")
         
         try:
             # Создаем базовые данные о командах
@@ -707,7 +820,7 @@ def process_simple_match(update: Update, context: CallbackContext) -> None:
             prediction = generate_match_prediction(match_info, match['min_symbols'])
             
             # Отправка результата
-            message = f"📊 *Прогноз для {prediction['teams']}:*\n\n{prediction['prediction']}"
+            message = f"📊 *Прогноз {i}/{len(matches)} для {prediction['teams']}:*\n\n{prediction['prediction']}"
             
             # Разбиваем сообщение, если оно слишком длинное
             if len(message) > 4000:
@@ -727,37 +840,76 @@ def process_simple_match(update: Update, context: CallbackContext) -> None:
                 f"Пожалуйста, попробуйте еще раз или уточните команды."
             )
     
-    update.message.reply_text("✅ Прогнозы готовы!")
+    update.message.reply_text("✅ Все прогнозы готовы!")
 
 def process_text_or_buttons(update: Update, context: CallbackContext) -> None:
     """Обрабатывает обычные текстовые сообщения и нажатия на кнопки."""
     message_text = update.message.text
+    user_id = update.effective_user.id
+    message_id = update.message.message_id
     
-    # Обрабатываем кнопки меню
-    if message_text == "Контакты":
-        contact_text = """
+    # Создаем уникальный идентификатор для сообщения
+    message_key = f"{user_id}_{message_id}"
+    
+    # Проверяем, не обрабатывается ли уже это сообщение
+    with message_lock:
+        if message_key in processing_messages:
+            logger.warning(f"Сообщение {message_key} уже обрабатывается, пропускаем.")
+            update.message.reply_text("⚠️ Это сообщение уже обрабатывается. Пожалуйста, дождитесь завершения.")
+            return
+        
+        # Отмечаем сообщение как обрабатываемое
+        processing_messages[message_key] = datetime.now()
+    
+    try:
+        # Обрабатываем кнопки меню
+        if message_text == "Контакты":
+            contact_text = """
 *Контактная информация:*
 
 Разработчик: @ainishanov
 
 По всем вопросам обращайтесь к разработчику.
-        """
-        update.message.reply_text(contact_text, parse_mode='Markdown')
-        return
-    
-    # Всегда сначала пробуем упрощенный парсинг для любого сообщения
-    parsed_data = parse_simple_message(message_text)
-    if parsed_data['matches']:
-        # Если нашли матчи, обрабатываем их
-        process_simple_match(update, context)
-    else:
-        # Если не нашли матчи в упрощенном формате, пробуем старый формат
-        process_matches(update, context)
+            """
+            update.message.reply_text(contact_text, parse_mode='Markdown')
+            return
+        
+        # Всегда сначала пробуем упрощенный парсинг для любого сообщения
+        parsed_data = parse_simple_message(message_text)
+        if parsed_data['matches']:
+            # Если нашли матчи, обрабатываем их
+            process_simple_match(update, context)
+        else:
+            # Если не нашли матчи в упрощенном формате, пробуем старый формат
+            process_matches(update, context)
+    finally:
+        # В любом случае удаляем сообщение из обрабатываемых
+        with message_lock:
+            if message_key in processing_messages:
+                del processing_messages[message_key]
 
-# Обработчик для webhook
+# Функция для очистки устаревших записей обрабатываемых сообщений
+def cleanup_processing_messages():
+    """Удаляет старые записи из словаря processing_messages."""
+    now = datetime.now()
+    with message_lock:
+        keys_to_delete = []
+        for key, timestamp in processing_messages.items():
+            # Если сообщение обрабатывается более 5 минут, считаем его "зависшим"
+            if (now - timestamp).total_seconds() > 300:  # 5 минут
+                keys_to_delete.append(key)
+        
+        for key in keys_to_delete:
+            del processing_messages[key]
+            logger.warning(f"Удалено устаревшее сообщение {key} из обрабатываемых.")
+
+# Добавим периодическую очистку устаревших сообщений в webhook-обработчик
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
     """Обработчик для входящих сообщений через webhook."""
+    # Периодически очищаем устаревшие записи
+    cleanup_processing_messages()
+    
     update = Update.de_json(request.get_json(force=True), bot)
     dispatcher.process_update(update)
     return 'ok'
@@ -786,6 +938,7 @@ def run_polling():
     dispatcher.add_handler(CommandHandler("help", help_command))
     dispatcher.add_handler(CommandHandler("menu", setup_menu))
     dispatcher.add_handler(CommandHandler("example", example_command))
+    dispatcher.add_handler(CommandHandler("cancel", cancel_processing))
     
     # Обработчик обычных сообщений и кнопок
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, process_text_or_buttons))

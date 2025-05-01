@@ -1,0 +1,176 @@
+V1 API
+Search icon Search
+
+Search for team by name
+/api/v1/json/3/searchteams.php?t=Arsenal
+
+Search for team short code
+/api/v1/json/3/searchteams.php?sname=ARS
+
+Search for players by name
+/api/v1/json/3/searchplayers.php?p=Danny_Welbeck
+
+Search for all players from team patreon icon
+/api/v1/json/3/searchplayers.php?t=Arsenal (Arsenal Only test)
+
+Search for event by event name
+/api/v1/json/3/searchevents.php?e=Arsenal_vs_Chelsea
+/api/v1/json/3/searchevents.php?e=Arsenal_vs_Chelsea&s=2016-2017
+
+Search for event by event file name
+/api/v1/json/3/searchfilename.php?e=English_Premier_League_2015-04-26_Arsenal_vs_Chelsea
+
+Search for Venue
+/api/v1/json/3/searchvenues.php?t=Wembley
+
+NOTE: You can replace spaces '%20' with underscores if you want, when requesting multi word strings.
+
+List icon List
+
+List all sports patreon icon
+/api/v1/json/3/all_sports.php
+
+List all leagues (limited 50 on free tier)
+/api/v1/json/3/all_leagues.php
+
+List all countries
+/api/v1/json/3/all_countries.php
+
+List all Leagues in a country (limited 50 on free tier)
+/api/v1/json/3/search_all_leagues.php?c=England
+/api/v1/json/3/search_all_leagues.php?c=England&s=Soccer
+
+List all Seasons in a League (or show posters and badges from seasons)
+/api/v1/json/3/search_all_seasons.php?id=4328
+/api/v1/json/3/search_all_seasons.php?id=4328&poster=1
+/api/v1/json/3/search_all_seasons.php?id=4328&badge=1
+
+List all Teams in a League
+/api/v1/json/3/search_all_teams.php?l=English%20Premier%20League
+/api/v1/json/3/search_all_teams.php?s=Soccer&c=Spain
+
+List All teams details in a league by Id patreon icon
+/api/v1/json/3/lookup_all_teams.php?id=4328
+
+List All players in a team by Team Id patreon icon
+/api/v1/json/3/lookup_all_players.php?id=133604
+
+List all users loved teams and players
+/api/v1/json/3/searchloves.php?u=zag
+
+Edit icon Lookups
+
+League Details by Id patreon icon
+/api/v1/json/3/lookupleague.php?id=4346
+
+Team Details by Id patreon icon
+/api/v1/json/3/lookupteam.php?id=133604
+
+Player Details by Id
+/api/v1/json/3/lookupplayer.php?id=34145937
+
+Venue Details by Id
+/api/v1/json/3/lookupvenue.php?id=16163
+
+Event Details by Id patreon icon
+/api/v1/json/3/lookupevent.php?id=441613
+
+Event Statistics by Id patreon icon
+/api/v1/json/3/lookupeventstats.php?id=1032723
+
+Event Lineup by Id patreon icon
+/api/v1/json/3/lookuplineup.php?id=1032723
+
+List timeline for events by event ID patreon icon
+/api/v1/json/3/lookuptimeline.php?id=1032718
+
+Player Honours by Player Id
+/api/v1/json/3/lookuphonours.php?id=34147178
+
+Player Milestones by Player Id
+/api/v1/json/3/lookupmilestones.php?id=34161397
+
+Player Former Teams by Player Id
+/api/v1/json/3/lookupformerteams.php?id=34147178
+
+Player Contracts by Player Id
+/api/v1/json/3/lookupcontracts.php?id=34147178
+
+Event Player Results by Event Id
+/api/v1/json/3/eventresults.php?id=652890
+
+Event TV by Event Id patreon icon
+/api/v1/json/3/lookuptv.php?id=584911
+
+Lookup Table by League ID and Season
+/api/v1/json/3/lookuptable.php?l=4328&s=2020-2021 * Featured Soccer Leagues only
+
+Lookup Equipment by Team ID
+/api/v1/json/3/lookupequipment.php?id=133597
+
+Calendar Icon Schedules
+
+Next 5 Events by Team Id patreon icon
+/api/v1/json/3/eventsnext.php?id=133602
+
+Next 25 Events by League Id patreon icon
+/api/v1/json/3/eventsnextleague.php?id=4328
+
+Last 5 Events by Team Id (Limited to home team for free tier)
+/api/v1/json/3/eventslast.php?id=133602
+
+Last 15 Events by League Id patreon icon
+/api/v1/json/3/eventspastleague.php?id=4328
+
+Events in a specific round by league id/round/season
+/api/v1/json/3/eventsround.php?id=4328&r=38&s=2014-2015
+
+Events on a specific day patreon icon
+/api/v1/json/3/eventsday.php?d=2014-10-10
+/api/v1/json/3/eventsday.php?d=2014-10-10&s=Soccer
+/api/v1/json/3/eventsday.php?d=2014-10-10&l=4356
+/api/v1/json/3/eventsday.php?d=2014-10-10&l=Australian_A-League
+
+TV Events on a day (By Sport/Date/TV Station Country) patreon icon
+/api/v1/json/3/eventstv.php?d=2018-07-07
+/api/v1/json/3/eventstv.php?d=2018-07-07&s=Fighting
+/api/v1/json/3/eventstv.php?d=2019-09-28&a=United%20Kingdom&s=Cycling
+/api/v1/json/3/eventstv.php?c=Peacock_Premium
+
+All events in specific league by season (Free tier limited to 100 events)
+/api/v1/json/3/eventsseason.php?id=4328&s=2014-2015
+
+NOTE: These round numbers relate to special strings:
+Round 125 = Quarter-Final
+Round 150 = Semi-Final
+Round 160 = Playoff
+Round 170 = Playoff Semi-Final
+Round 180 = Playoff Final
+Round 200 = Final
+Round 500 = Pre-Season
+
+Image Icon Images
+
+Preview Images
+Most of the time you won't want to download the original large image, just get a small preview.
+This is possible simple by adding ''/small'' onto the end URL. This will give you a small 200px version.
+Original - /images/media/league/fanart/xpwsrw1421853005.jpg
+Medium 500px - /images/media/league/fanart/xpwsrw1421853005.jpg/medium
+Small 250px - /images/media/league/fanart/xpwsrw1421853005.jpg/small
+Tiny 50px - /images/media/league/badge/pdd43f1610891709.png/tiny
+
+Youtube icon Video Highlights patreon icon
+Latest Event Youtube Highlights
+/api/v1/json/{APIKEY}/eventshighlights.php
+/api/v1/json/{APIKEY}/eventshighlights.php?d=2019-10-13
+/api/v1/json/{APIKEY}/eventshighlights.php?d=2019-10-12&l=WTA%20Tour
+/api/v1/json/{APIKEY}/eventshighlights.php?l=MLB
+/api/v1/json/3/eventshighlights.php?i=4329
+/api/v1/json/{APIKEY}/eventshighlights.php?s=Soccer
+/api/v1/json/{APIKEY}/eventshighlights.php?s=Soccer&d=2020-02-15
+
+Up Arrow Larger API Limits patreon icon
+Show ALL events from season (developer key is limited to 250 events).
+/api/v1/json/3/eventsseason.php?id=4424&s=2019
+
+Music Arrow icon Livescores V1 patreon icon
